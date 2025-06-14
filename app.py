@@ -1,105 +1,105 @@
 import requests
 import pandas as pd
 import streamlit as st
-import joblib
-import numpy as np
 
 API_KEY = '260eabf9df4291276b979adf99e30742'
-SPORT = 'soccer_epl'
+LEAGUES = [
+    'soccer_epl',
+    'soccer_spain_la_liga',
+    'soccer_germany_bundesliga',
+    'soccer_italy_serie_a',
+    'soccer_uefa_champs_league'
+]
 REGION = 'us'
 MARKET = 'h2h'
 
-# Load trained model
-model = joblib.load('model.pkl')
 
-# --- Function to fetch odds and apply predictions ---
-def fetch_and_predict(bankroll):
-    url = f'https://api.the-odds-api.com/v4/sports/{SPORT}/odds/'
-    params = {
-        'apiKey': API_KEY,
-        'regions': REGION,
-        'markets': MARKET,
-        'bookmakers': 'fanduel'
-    }
+# --- Fetch Odds for All Leagues ---
+def fetch_all_odds():
+    all_matches = []
 
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        st.error(f"Error {response.status_code}: {response.text}")
-        return pd.DataFrame()
+    for league in LEAGUES:
+        url = f'https://api.the-odds-api.com/v4/sports/{league}/odds/'
+        params = {
+            'apiKey': API_KEY,
+            'regions': REGION,
+            'markets': MARKET,
+            'bookmakers': 'fanduel'
+        }
 
-    odds_data = response.json()
-    matches = []
+        response = requests.get(url, params=params)
+        if response.status_code != 200:
+            st.warning(f"[{league}] Error {response.status_code}: {response.text}")
+            continue
 
-    for game in odds_data:
-        home = game['home_team']
-        away = game['away_team']
-        commence = game['commence_time']
+        odds_data = response.json()
 
-        for bookmaker in game['bookmakers']:
-            for market in bookmaker['markets']:
-                for outcome in market['outcomes']:
-                    team = outcome['name']
-                    odds = outcome['price']
+        for game in odds_data:
+            home = game['home_team']
+            away = game['away_team']
+            commence = game['commence_time']
+            league_name = league.replace('soccer_', '').replace('_', ' ').title()
 
-                    # Predict win probability using model
-                    home_encoded = hash(home) % 1000
-                    away_encoded = hash(away) % 1000
-                    goal_diff = 0
-                    total_goals = 0
-                    features = np.array([[home_encoded, away_encoded, goal_diff, total_goals]])
-                    est_prob = round(model.predict_proba(features)[0][1], 3)
+            for bookmaker in game['bookmakers']:
+                for market in bookmaker['markets']:
+                    for outcome in market['outcomes']:
+                        team = outcome['name']
+                        odds = outcome['price']
 
-                    payout = odds - 1
-                    EV = round((est_prob * payout) - ((1 - est_prob) * 1), 3)
+                        # ➕ Estimated win probabilities (placeholder logic)
+                        if 'Manchester City' in team:
+                            est_prob = 0.75
+                        elif 'Sheffield' in team:
+                            est_prob = 0.2
+                        else:
+                            est_prob = 0.5
 
-                    # Kelly Calculation
-                    b = payout
-                    p = est_prob
-                    q = 1 - p
-                    kelly_fraction = (b * p - q) / b if b != 0 else 0
-                    kelly_fraction = max(kelly_fraction, 0)
-                    kelly_fraction = round(kelly_fraction * 0.5, 3)
+                        payout = odds - 1
+                        EV = round((est_prob * payout) - ((1 - est_prob) * 1), 3)
 
-                    # Calculate actual bet amount
-                    bet_amount = round(kelly_fraction * bankroll, 2)
+                        b = payout
+                        p = est_prob
+                        q = 1 - p
+                        kelly_fraction = (b * p - q) / b if b != 0 else 0
+                        kelly_fraction = max(kelly_fraction, 0)
+                        kelly_fraction = round(kelly_fraction * 0.5, 3)
 
-                    matches.append({
-                        'Match': f"{home} vs {away}",
-                        'Team': team,
-                        'Odds': odds,
-                        'Est. Prob': est_prob,
-                        'EV': EV,
-                        'Kelly Stake %': kelly_fraction,
-                        'Bet Amount ($)': bet_amount
-                    })
+                        all_matches.append({
+                            'League': league_name,
+                            'Match': f"{home} vs {away}",
+                            'Team': team,
+                            'Odds': odds,
+                            'Est. Prob': est_prob,
+                            'EV': EV,
+                            'Kelly Stake %': kelly_fraction
+                        })
 
-    return pd.DataFrame(matches)
+    return pd.DataFrame(all_matches)
+
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="⚽ Soccer Betting Optimizer", layout="wide")
-st.title("⚽ Soccer Betting Optimizer (Model-Based)")
+st.set_page_config(page_title="Soccer Betting Optimizer", layout="wide")
+st.title("Sushant bet odds (Free API (need to update))")
 
 with st.sidebar:
-    st.header("Filters & Bankroll")
-    bankroll = st.number_input("Your current bankroll ($)", min_value=10, value=100)
+    st.header("Filters")
     min_ev = st.slider("Minimum EV", 0.0, 5.0, 0.5, step=0.1)
     min_kelly = st.slider("Minimum Kelly %", 0.0, 0.5, 0.05, step=0.01)
     show_all = st.checkbox("Show All Bets (Ignore Filters)", value=False)
 
-st.write("🔄 Fetching EPL odds and calculating smart picks...")
-
-df = fetch_and_predict(bankroll)
+st.write("🔄 Fetching odds from 5 top leagues...")
+df = fetch_all_odds()
 
 if df.empty:
-    st.warning("No matches or odds data available.")
+    st.warning("No betting data found.")
 else:
     if not show_all:
         df = df[(df['EV'] >= min_ev) & (df['Kelly Stake %'] >= min_kelly)]
 
     df = df.sort_values(by='EV', ascending=False)
 
-    st.success(f"✅ {len(df)} smart bets found")
+    st.success(f"✅ {len(df)} recommended bets found")
     st.dataframe(df, use_container_width=True)
 
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📁 Download CSV", csv, "model_based_bets.csv", "text/csv")
+    st.download_button("📁 Download CSV", csv, "multi_league_bets.csv", "text/csv")
